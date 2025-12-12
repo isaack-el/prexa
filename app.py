@@ -27,7 +27,6 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, balanced_accuracy_score
 import warnings
 warnings.filterwarnings('ignore')
-from hybrid_model import HybridRFSVM
 
 def parse_boolean(value):
   
@@ -78,6 +77,10 @@ class HybridRFSVM(BaseEstimator, ClassifierMixin):
         self.label_encoder = LabelEncoder()
         self.classes_ = None
         self.feature_importances_ = None
+
+    MODEL_PATH = "model/api_model.joblib"
+    with open(MODEL_PATH, "rb") as f:
+    model_data = joblib.load(f, mmap_mode=None)
     
     def fit(self, X, y):
         y_encoded = self.label_encoder.fit_transform(y)
@@ -1744,3 +1747,4 @@ if __name__ == "__main__":
     
 
     app.run(host="0.0.0.0", port=5000, debug=True)
+
