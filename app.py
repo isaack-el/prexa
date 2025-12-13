@@ -1204,71 +1204,12 @@ class CardiovascularPredictor:
         
         return recommendations[:10]  
 
-
-print("=" * 70)
-print("🚀 PREXA v6.0 - RAILWAY DEPLOYMENT START")
-print("=" * 70)
-print(f"📦 Python: {sys.version}")
-print(f"📂 Current directory: {os.getcwd()}")
-
-# LIST FILES FOR DEBUGGING
-print(f"📁 Files in current directory:")
-for f in os.listdir('.'):
-    if not f.startswith('.'):
-        print(f"  • {f}")
-
-# CHECK MODEL FOLDER
-if os.path.exists('model'):
-    print(f"\n✅ 'model' folder found!")
-    print(f"📁 Files in 'model/':")
-    for f in os.listdir('model'):
-        print(f"  • {f}")
-else:
-    print(f"\n❌ 'model' folder NOT found!")
-
-# ============================================================================
-# SEARCH FOR MODEL FILE IN MULTIPLE LOCATIONS (RAILWAY COMPATIBLE)
-# ============================================================================
-
-possible_paths = [
-    "model/api_model.joblib",           # Local development structure
-    "./model/api_model.joblib",         # Relative path
-    "/app/model/api_model.joblib",      # Railway default deployment path
-    "api_model.joblib",                 # Root directory (just in case)
-    os.path.join(os.getcwd(), "model", "api_model.joblib"),  # Absolute path
-]
-
-MODEL_PATH = None
-for test_path in possible_paths:
-    if os.path.exists(test_path):
-        MODEL_PATH = test_path
-        print(f"\n✅ FOUND MODEL FILE AT: {MODEL_PATH}")
-        print(f"   📏 Size: {os.path.getsize(MODEL_PATH):,} bytes")
-        print(f"   📍 Full path: {os.path.abspath(MODEL_PATH)}")
-        break
-
-if MODEL_PATH is None:
-    print(f"\n⚠️  Model not found in standard locations, searching...")
-    # Deep search for any .joblib file
-    import glob
-    joblib_files = glob.glob("**/*.joblib", recursive=True)
-    if joblib_files:
-        print(f"   Found {len(joblib_files)} .joblib files:")
-        for f in joblib_files:
-            print(f"   • {f}")
-        MODEL_PATH = joblib_files[0]
-        print(f"\n📦 Will use: {MODEL_PATH}")
-    else:
-        print("❌ NO .joblib FILES FOUND ANYWHERE!")
-        MODEL_PATH = None
-
-print("=" * 70)
+MODEL_DIR = "model"
+MODEL_PATH = os.path.join(MODEL_DIR, "api_model.joblib")
 
 app = Flask(__name__)
 
-# ============================================================================
-# LOAD MODEL IF FOUND
-# ============================================================================
+logger.info(f"\n Loading model from: {MODEL_PATH}")
 
 use_model = False
 model_data = None
@@ -1280,99 +1221,54 @@ feature_names = None
 model_info = None
 predictor = None
 
-if MODEL_PATH and os.path.exists(MODEL_PATH):
+if os.path.exists(MODEL_PATH):
     try:
-        print(f"\n🔄 LOADING MODEL FROM: {MODEL_PATH}")
+        logger.info(f" Model file exists, loading...")
+        model_data = joblib.load(MODEL_PATH)  
         
-        # Simple load for Railway
-        model_data = joblib.load(MODEL_PATH)
-        print("✅ Model data loaded successfully!")
-        
-        # Extract components
         pipeline = model_data.get("pipeline")
         label_encoder = model_data.get("label_encoder")
-        feature_names = model_data.get("feature_names", [])  # Default empty list
-        model_info = model_data.get("model_info", {})        # Default empty dict
+        feature_names = model_data.get("feature_names")
+        model_info = model_data.get("model_info", {})
         
-        print(f"\n📊 MODEL COMPONENTS:")
-        print(f"   • Pipeline: {type(pipeline).__name__ if pipeline else 'None'}")
-        print(f"   • Label encoder: {'✅ Loaded' if label_encoder else '❌ Missing'}")
-        print(f"   • Features: {len(feature_names)}")
+        risk_calculator = OptimizedRiskScoreCalculator()
+        frs_calculator = FraminghamRiskScoreCalculator()
         
-        # Validate minimum required components
-        if pipeline is None or label_encoder is None:
-            print("❌ CRITICAL: Missing pipeline or label_encoder!")
-            print("   Cannot create predictor without these components")
-            use_model = False
-        else:
-            # Initialize calculators
-            risk_calculator = OptimizedRiskScoreCalculator()
-            frs_calculator = FraminghamRiskScoreCalculator()
-            
-            # Create predictor
+        logger.info(f" Model verification:")
+        logger.info(f"   Pipeline type: {type(pipeline).__name__ if pipeline else 'None'}")
+        logger.info(f"   Label encoder: {'Loaded' if label_encoder else 'Not loaded'}")
+        logger.info(f"   Feature names count: {len(feature_names) if feature_names else 0}")
+        
+        if pipeline is not None and label_encoder is not None and feature_names:
             predictor = CardiovascularPredictor(
                 pipeline=pipeline,
                 label_encoder=label_encoder,
                 risk_calculator=risk_calculator,
                 frs_calculator=frs_calculator,
-                feature_names=feature_names if feature_names else []
+                feature_names=feature_names
             )
-            
             use_model = True
-            print("\n🎯 PREDICTOR STATUS: READY!")
+            logger.info(" Model loaded successfully!")
+            logger.info(f"   Model: {model_info.get('name', 'Cardiovascular Risk Predictor')}")
+            logger.info(f"   Version: {model_info.get('version', 'v6.0')}")
+            logger.info(f"   Features: {len(feature_names)}")
             
-            # Additional info
-            if label_encoder and hasattr(label_encoder, 'classes_'):
+            if label_encoder:
                 classes = list(label_encoder.classes_)
-                print(f"   • Classes: {len(classes)} conditions")
-                if classes:
-                    print(f"   • First 3: {', '.join(classes[:3])}")
-            
-            if model_info:
-                print(f"   • Model name: {model_info.get('name', 'Unknown')}")
-                print(f"   • Version: {model_info.get('version', 'Unknown')}")
+                logger.info(f"   Classes ({len(classes)}): {classes}")
+        else:
+            logger.error(" Model components missing:")
+            logger.error(f"   Pipeline: {'OK' if pipeline else 'MISSING'}")
+            logger.error(f"   Label encoder: {'OK' if label_encoder else 'MISSING'}")
+            logger.error(f"   Feature names: {'OK' if feature_names else 'MISSING'}")
+            use_model = False
         
     except Exception as e:
-        print(f"\n❌ FAILED TO LOAD MODEL!")
-        print(f"   Error type: {type(e).__name__}")
-        print(f"   Error message: {str(e)}")
-        
-        # Print traceback for debugging
-        import traceback
-        print(f"\n🔍 ERROR TRACEBACK (last 5 lines):")
-        tb_lines = traceback.format_exc().split('\n')
-        for line in tb_lines[-5:]:
-            if line.strip():
-                print(f"   {line}")
-        
+        logger.error(f" Error loading model: {e}", exc_info=True)
         use_model = False
 else:
-    print(f"\n⚠️  SKIPPING MODEL LOAD - FILE NOT FOUND")
-    print(f"   Path attempted: {MODEL_PATH}")
-    print(f"   File exists: {os.path.exists(MODEL_PATH) if MODEL_PATH else 'No path'}")
-    use_model = False
-
-# ============================================================================
-# FINAL STATUS
-# ============================================================================
-
-print("\n" + "=" * 70)
-if use_model:
-    print("✅ APPLICATION STATUS: FULLY OPERATIONAL")
-    print("   • Model: Loaded successfully")
-    print("   • Predictor: Ready")
-    print("   • Endpoints: /, /health, /predict, /model-info available")
-else:
-    print("⚠️  APPLICATION STATUS: LIMITED FUNCTIONALITY")
-    print("   • Model: NOT loaded")
-    print("   • Predictor: NOT available")
-    print("   • /predict endpoint will return error")
-    print("   • Basic routes (/, /health) will work")
-print("=" * 70)
-
-# Also log via logger for consistency
-logger.info(f"Model loading complete. Status: {'LOADED' if use_model else 'FAILED'}")
-
+    logger.error(f" Model not found at {MODEL_PATH}")
+    logger.error("   Please run train.py first to generate model")
 
 @app.route("/")
 def index():
@@ -1836,6 +1732,7 @@ if __name__ == "__main__":
     
 
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
 
 
