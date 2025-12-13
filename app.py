@@ -1224,7 +1224,12 @@ predictor = None
 if os.path.exists(MODEL_PATH):
     try:
         logger.info(f" Model file exists, loading...")
-        model_data = joblib.load(MODEL_PATH)
+        model_data = joblib.load(MODEL_PATH)  
+        
+        pipeline = model_data.get("pipeline")
+        label_encoder = model_data.get("label_encoder")
+        feature_names = model_data.get("feature_names")
+        model_info = model_data.get("model_info", {})
         
       
         pipeline = model_data.get("pipeline")
@@ -1736,6 +1741,7 @@ if __name__ == "__main__":
     
 
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
 
 
