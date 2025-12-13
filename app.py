@@ -1211,9 +1211,7 @@ class CardiovascularPredictor:
 
 MODEL_PATH = "model/api_model.joblib"
 
-
 app = Flask(__name__)
-
 
 logger.info(f"\n Loading model from: {MODEL_PATH}")
 
@@ -1230,10 +1228,11 @@ predictor = None
 if os.path.exists(MODEL_PATH):
     try:
         logger.info(f" Model file exists, loading...")
-        with open(MODEL_PATH, "rb") as f:
-            model_data = joblib.load(f, mmap_mode=None)
         
-      
+        
+        with open(MODEL_PATH, "rb") as f:
+            model_data = joblib.load(f, mmap_mode=None)  
+        
         pipeline = model_data.get("pipeline")
         label_encoder = model_data.get("label_encoder")
         feature_names = model_data.get("feature_names")
@@ -1743,6 +1742,7 @@ if __name__ == "__main__":
     
 
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
 
 
