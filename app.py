@@ -1227,57 +1227,60 @@ predictor = None
 
 if os.path.exists(MODEL_PATH):
     try:
-        logger.info(f" Model file exists, loading with custom unpickler...")
-        
-        
-        import sys
-        import __main__
-        
-       
-        __main__.HybridRFSVM = HybridRFSVM
-        sys.modules['__main__'].HybridRFSVM = HybridRFSVM
+        logger.info(f" Model file exists, loading with workaround...")
         
        
         import pickle
+        import sys
+        import builtins
         
-        class HybridRFSVMUnpickler(pickle.Unpickler):
+       
+        builtins.HybridRFSVM = HybridRFSVM
+        
+       
+        sys.modules[__name__].HybridRFSVM = HybridRFSVM
+        
+        
+        class AlwaysHybridRFSVMUnpickler(pickle.Unpickler):
             def find_class(self, module, name):
+              
                 if name == 'HybridRFSVM':
-                    return HybridRFSVM
-                
-                if module == '__main__' and name == 'HybridRFSVM':
                     return HybridRFSVM
                
                 try:
                     return super().find_class(module, name)
-                except AttributeError:
-                    
-                    if name == 'HybridRFSVM':
+                except AttributeError as e:
+                    if 'HybridRFSVM' in str(e):
                         return HybridRFSVM
                     raise
         
-       
+        
         with open(MODEL_PATH, 'rb') as f:
-            model_data = HybridRFSVMUnpickler(f).load()
+            model_data = AlwaysHybridRFSVMUnpickler(f).load()
         
-        logger.info(" Model loaded successfully with custom unpickler!")
+        logger.info(" Model loaded with custom unpickler workaround!")
         
-        pipeline = model_data.get("pipeline")
-        label_encoder = model_data.get("label_encoder")
-        feature_names = model_data.get("feature_names")
-        model_info = model_data.get("model_info", {})
-        
+       
+        if isinstance(model_data, dict) and 'pipeline' in model_data:
+            pipeline = model_data.get("pipeline")
+            label_encoder = model_data.get("label_encoder")
+            feature_names = model_data.get("feature_names")
+            model_info = model_data.get("model_info", {})
+        else:
+            pipeline = model_data
+            label_encoder = None
+            feature_names = []
+            model_info = {}
         
         risk_calculator = OptimizedRiskScoreCalculator()
         frs_calculator = FraminghamRiskScoreCalculator()
         
-      
         logger.info(f" Model verification:")
         logger.info(f"   Pipeline type: {type(pipeline).__name__ if pipeline else 'None'}")
         logger.info(f"   Label encoder: {'Loaded' if label_encoder else 'Not loaded'}")
         logger.info(f"   Feature names count: {len(feature_names) if feature_names else 0}")
         
-        if pipeline is not None and label_encoder is not None and feature_names:
+        if pipeline is not None:
             predictor = CardiovascularPredictor(
                 pipeline=pipeline,
                 label_encoder=label_encoder,
@@ -1288,17 +1291,14 @@ if os.path.exists(MODEL_PATH):
             use_model = True
             logger.info(" Model loaded successfully!")
             logger.info(f"   Model: {model_info.get('name', 'Cardiovascular Risk Predictor')}")
-            logger.info(f"   Version: {model_info.get('version', 'v6.0')}")  
+            logger.info(f"   Version: {model_info.get('version', 'v6.0')}")
             logger.info(f"   Features: {len(feature_names)}")
             
             if label_encoder:
                 classes = list(label_encoder.classes_)
                 logger.info(f"   Classes ({len(classes)}): {classes}")
         else:
-            logger.error(" Model components missing:")
-            logger.error(f"   Pipeline: {'OK' if pipeline else 'MISSING'}")
-            logger.error(f"   Label encoder: {'OK' if label_encoder else 'MISSING'}")
-            logger.error(f"   Feature names: {'OK' if feature_names else 'MISSING'}")
+            logger.error(" Pipeline not found in model data")
             use_model = False
         
     except Exception as e:
@@ -1771,6 +1771,7 @@ if __name__ == "__main__":
     
 
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
 
 
