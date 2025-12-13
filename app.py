@@ -1229,9 +1229,8 @@ if os.path.exists(MODEL_PATH):
     try:
         logger.info(f" Model file exists, loading...")
         
-        
-        with open(MODEL_PATH, "rb") as f:
-            model_data = joblib.load(f, mmap_mode=None)  
+       
+        model_data = joblib.load(MODEL_PATH)
         
         pipeline = model_data.get("pipeline")
         label_encoder = model_data.get("label_encoder")
@@ -1259,7 +1258,7 @@ if os.path.exists(MODEL_PATH):
             use_model = True
             logger.info(" Model loaded successfully!")
             logger.info(f"   Model: {model_info.get('name', 'Cardiovascular Risk Predictor')}")
-            logger.info(f"   Version: {model_info.get('version', 'v6.0')}")
+            logger.info(f"   Version: model_info.get('version', 'v6.0')")
             logger.info(f"   Features: {len(feature_names)}")
             
             if label_encoder:
@@ -1742,6 +1741,7 @@ if __name__ == "__main__":
     
 
     app.run(host="0.0.0.0", port=5000, debug=True)
+
 
 
 
