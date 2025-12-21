@@ -18,7 +18,6 @@ import numpy as np
 import datetime
 import json
 import pandas as pd
-from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.calibration import CalibratedClassifierCV
@@ -27,6 +26,9 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, balanced_accuracy_score
 import warnings
 warnings.filterwarnings('ignore')
+
+# Import custom model classes
+from model_classes import HybridRFSVM
 
 def parse_boolean(value):
   
@@ -66,112 +68,6 @@ def parse_float_or_none(value):
         return float(value)
     except (ValueError, TypeError):
         return None
-
-class HybridRFSVM(BaseEstimator, ClassifierMixin):
-    def __init__(self, random_state=42, calibration_method='isotonic', use_smote=True):
-        self.random_state = random_state
-        self.calibration_method = calibration_method
-        self.rf_model = None
-        self.svm_model = None
-        self.svm_calibrator = None
-        self.label_encoder = LabelEncoder()
-        self.classes_ = None
-        self.feature_importances_ = None
-
-    def fit(self, X, y):
-        y_encoded = self.label_encoder.fit_transform(y)
-        self.classes_ = self.label_encoder.classes_
-        
-       
-        classes = np.unique(y_encoded)
-        weights = compute_class_weight('balanced', classes=classes, y=y_encoded)
-        class_weights = dict(zip(range(len(classes)), weights))
-        
-        X_train_final = X
-        y_train_final = y_encoded
-        
-      
-        self.rf_model = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=15,
-            min_samples_split=5,
-            min_samples_leaf=2,
-            random_state=self.random_state,
-            class_weight=class_weights,
-            n_jobs=-1,
-            bootstrap=True,
-            max_features='sqrt'
-        )
-        self.rf_model.fit(X_train_final, y_train_final)
-        self.feature_importances_ = self.rf_model.feature_importances_
-        
-        
-        svm_base = SVC(
-            C=1.0,
-            kernel='rbf',
-            gamma='scale',
-            probability=False,
-            random_state=self.random_state,
-            class_weight=class_weights,
-            decision_function_shape='ovr'
-        )
-        
-        self.svm_calibrator = CalibratedClassifierCV(
-            svm_base,
-            method=self.calibration_method,
-            cv=3
-        )
-        self.svm_calibrator.fit(X_train_final, y_train_final)
-        
-        return self
-    
-    def predict(self, X):
-       
-        rf_pred = self.rf_model.predict(X)
-        svm_proba = self.svm_calibrator.predict_proba(X)
-        svm_pred = np.argmax(svm_proba, axis=1)
-        svm_confidence = np.max(svm_proba, axis=1)
-        
-       
-        class_counts = np.bincount(rf_pred)
-        class_weights = 1.0 / (class_counts + 1)
-        class_weights = class_weights / class_weights.max()
-        
-        hybrid_pred = []
-        for i in range(len(rf_pred)):
-            class_weight = class_weights[rf_pred[i]]
-            threshold = 0.6 + (0.3 * class_weight)
-            
-            if svm_confidence[i] > threshold:
-                hybrid_pred.append(svm_pred[i])
-            else:
-                hybrid_pred.append(rf_pred[i])
-        
-        hybrid_pred = np.array(hybrid_pred)
-        return self.label_encoder.inverse_transform(hybrid_pred)
-    
-    def predict_proba(self, X):
-       
-        rf_proba = self.rf_model.predict_proba(X)
-        svm_proba = self.svm_calibrator.predict_proba(X)
-        avg_proba = (0.6 * rf_proba) + (0.4 * svm_proba)
-        return avg_proba / avg_proba.sum(axis=1, keepdims=True)
-    
-    def score(self, X, y):
-       
-        y_pred = self.predict(X)
-        return accuracy_score(y, y_pred)
-    
-    def get_params(self, deep=True):
-        return {
-            'random_state': self.random_state,
-            'calibration_method': self.calibration_method
-        }
-    
-    def set_params(self, **parameters):
-        for parameter, value in parameters.items():
-            setattr(self, parameter, value)
-        return self
 
 
 class FraminghamRiskScoreCalculator:
@@ -1231,6 +1127,11 @@ predictor = None
 if os.path.exists(MODEL_PATH):
     try:
         logger.info(f" Model file exists, loading...")
+        
+        # Inject HybridRFSVM ke __main__ untuk backward compatibility
+        import __main__
+        __main__.HybridRFSVM = HybridRFSVM
+        
         model_data = joblib.load(MODEL_PATH)
         
       
@@ -1325,7 +1226,7 @@ def get_model_info():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    
+    """Endpoint untuk prediksi risiko kardiovaskular"""
     if not use_model or predictor is None:
         return jsonify({
             "success": False,
@@ -1334,94 +1235,114 @@ def predict():
         }), 503
     
     try:
+        # Get raw data
         data = request.get_json(force=True)
-        logger.info(f" Received prediction request")
+        logger.info(f"📥 Received prediction request")
+        logger.info(f"   Raw data: {data}")
         
-        
+        # Validate required params
         required_params = ['systole', 'diastole', 'heart_rate', 'temperature']
         missing_params = [param for param in required_params if param not in data]
         
         if missing_params:
+            logger.error(f"❌ Missing parameters: {missing_params}")
             return jsonify({
                 "success": False,
                 "error": f"Parameter berikut diperlukan: {', '.join(missing_params)}",
                 "status": "missing_parameter"
             }), 400
         
+        # Parse vital signs
+        try:
+            systole = float(data.get("systole", 120))
+            diastole = float(data.get("diastole", 80))
+            heart_rate = float(data.get("heart_rate", 72))
+            temperature = float(data.get("temperature", 36.5))
+        except (ValueError, TypeError) as e:
+            logger.error(f"❌ Invalid vital signs: {e}")
+            return jsonify({
+                "success": False,
+                "error": f"Nilai vital signs tidak valid: {str(e)}",
+                "status": "invalid_parameter"
+            }), 400
         
-        systole = float(data.get("systole", 120))
-        diastole = float(data.get("diastole", 80))
-        heart_rate = float(data.get("heart_rate", 72))
-        temperature = float(data.get("temperature", 36.5))
-        
-        
+        # Validate systole > diastole
         if systole <= diastole:
+            logger.error(f"❌ Systole <= Diastole: {systole} <= {diastole}")
             return jsonify({
                 "success": False,
                 "error": f"Systole ({systole}) harus lebih besar dari Diastole ({diastole})",
                 "status": "invalid_parameter"
             }), 400
         
-       
+        # Parse demographics with defaults
         age = int(data.get("age", 45))
         bmi = float(data.get("bmi", 24.0))
         smoking_status = data.get("smoking_status", "never")
         active_lifestyle = parse_boolean(data.get("active_lifestyle", True))
         
-        
+        # Parse medical history
         diabetes = parse_boolean(data.get("diabetes", False))
-        
         gender = data.get("gender", "male")
         
-       
+        # Parse family history
         family_history_cvd = parse_boolean(data.get("family_history_cvd", False))
         family_history_score = int(data.get("family_history_score", 0))
         family_history_type = data.get("family_history_type", "none")
         inheritance_pattern = data.get("inheritance_pattern", "none")
         
-       
+        # Parse lab data (optional)
         total_cholesterol = parse_float_or_none(data.get("total_cholesterol"))
         hdl_cholesterol = parse_float_or_none(data.get("hdl_cholesterol"))
         bp_treated = parse_boolean(data.get("bp_treated", False))
         
-       
         has_lab_data = total_cholesterol is not None and hdl_cholesterol is not None
         
-        logger.info(f" Data status: Lab data {'available' if has_lab_data else 'NOT available'}")
-        if has_lab_data:
-            logger.info(f"   Total Cholesterol: {total_cholesterol}, HDL: {hdl_cholesterol}")
+        logger.info(f"✓ Parsed parameters:")
+        logger.info(f"   Vitals: BP={systole}/{diastole}, HR={heart_rate}, Temp={temperature}")
+        logger.info(f"   Demographics: Age={age}, BMI={bmi}, Gender={gender}")
+        logger.info(f"   Lifestyle: Smoking={smoking_status}, Active={active_lifestyle}")
+        logger.info(f"   Medical: Diabetes={diabetes}")
+        logger.info(f"   Family: History={family_history_cvd}, Score={family_history_score}")
+        logger.info(f"   Lab data: {'Available' if has_lab_data else 'Not available'}")
         
-       
-        logger.info(f" Preparing input data...")
-        input_df = predictor.prepare_input_data(
-            systole=systole,
-            diastole=diastole,
-            heart_rate=heart_rate,
-            temperature=temperature,
-            age=age,
-            bmi=bmi,
-            smoking_status=smoking_status,
-            active_lifestyle=active_lifestyle,
-            diabetes=diabetes,  
-            family_history_cvd=family_history_cvd,
-            family_history_score=family_history_score,
-            family_history_type=family_history_type,
-            gender=gender,
-            inheritance_pattern=inheritance_pattern
-        )
+        # Prepare input data
+        logger.info(f"🔄 Preparing input data...")
+        try:
+            input_df = predictor.prepare_input_data(
+                systole=systole,
+                diastole=diastole,
+                heart_rate=heart_rate,
+                temperature=temperature,
+                age=age,
+                bmi=bmi,
+                smoking_status=smoking_status,
+                active_lifestyle=active_lifestyle,
+                diabetes=diabetes,
+                family_history_cvd=family_history_cvd,
+                family_history_score=family_history_score,
+                family_history_type=family_history_type,
+                gender=gender,
+                inheritance_pattern=inheritance_pattern
+            )
+            logger.info(f"✓ Input data prepared. Shape: {input_df.shape}")
+        except Exception as e:
+            logger.error(f"❌ Error preparing input: {e}", exc_info=True)
+            return jsonify({
+                "success": False,
+                "error": f"Error preparing input: {str(e)}",
+                "condition": "INPUT_ERROR"
+            }), 400
         
-        logger.info(f" Input data prepared. Shape: {input_df.shape}")
-        
-       
+        # Prepare FRS params
         frs_params = {
             'age': age,
-            'diabetes': diabetes,  
+            'diabetes': diabetes,
             'gender': gender,
             'bp_treated': bp_treated,
             'systole': systole,
             'smoking_status': smoking_status
         }
-        
         
         if has_lab_data:
             frs_params['total_cholesterol'] = total_cholesterol
@@ -1430,33 +1351,43 @@ def predict():
             frs_params['total_cholesterol'] = None
             frs_params['hdl_cholesterol'] = None
         
-      
-        logger.info(f" Making prediction...")
-        prediction_result = predictor.predict_with_risk_scoring(
-            input_df=input_df,
-            frs_params=frs_params,
-            systole=systole,
-            diastole=diastole,
-            heart_rate=heart_rate,
-            temperature=temperature,
-            age=age,
-            bmi=bmi,
-            smoking_status=smoking_status,
-            active_lifestyle=active_lifestyle,
-            diabetes=diabetes,
-            family_history_cvd=family_history_cvd,
-            family_history_score=family_history_score,
-            family_history_type=family_history_type
-        )
+        # Make prediction
+        logger.info(f"🤖 Making prediction...")
+        try:
+            prediction_result = predictor.predict_with_risk_scoring(
+                input_df=input_df,
+                frs_params=frs_params,
+                systole=systole,
+                diastole=diastole,
+                heart_rate=heart_rate,
+                temperature=temperature,
+                age=age,
+                bmi=bmi,
+                smoking_status=smoking_status,
+                active_lifestyle=active_lifestyle,
+                diabetes=diabetes,
+                family_history_cvd=family_history_cvd,
+                family_history_score=family_history_score,
+                family_history_type=family_history_type
+            )
+        except Exception as e:
+            logger.error(f"❌ Prediction error: {e}", exc_info=True)
+            return jsonify({
+                "success": False,
+                "error": f"Error during prediction: {str(e)}",
+                "condition": "PREDICTION_ERROR",
+                "detail": str(e)
+            }), 500
         
         if not prediction_result['success']:
+            logger.error(f"❌ Prediction failed: {prediction_result.get('error')}")
             return jsonify({
                 "success": False,
                 "error": prediction_result['error'],
                 "condition": "ERROR"
             }), 500
         
-        
+        # Build response
         response = {
             "success": True,
             "status": "success",
@@ -1478,10 +1409,8 @@ def predict():
                 "emoji": prediction_result['custom_risk_emoji'],
                 "components": prediction_result.get('risk_components', {})
             },
-           
             "framingham_risk_score": prediction_result.get('framingham_risk_score'),
             "lab_data_available": prediction_result.get('lab_data_available', False),
-            
             "family_history_impact": {
                 "has_history": family_history_cvd,
                 "score": family_history_score,
@@ -1523,22 +1452,23 @@ def predict():
             "medical_disclaimer": "HASIL INI HANYA SKRINING AWAL - KONSULTASIKAN DENGAN TENAGA MEDIS PROFESIONAL"
         }
         
-        logger.info(f" Prediction successful: {prediction_result['condition']}")
+        logger.info(f"✅ Prediction successful: {prediction_result['condition']}")
         return jsonify(response)
         
     except ValueError as e:
-        logger.error(f"ValueError: {e}")
+        logger.error(f"❌ ValueError: {e}", exc_info=True)
         return jsonify({
             "success": False,
             "error": str(e),
             "condition": "INPUT_ERROR"
         }), 400
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
+        logger.error(f"❌ Unexpected error: {e}", exc_info=True)
         return jsonify({
             "success": False,
             "error": f"Terjadi kesalahan sistem: {str(e)}",
-            "condition": "SYSTEM_ERROR"
+            "condition": "SYSTEM_ERROR",
+            "detail": str(e)
         }), 500
 
 @app.route("/health")
@@ -1738,9 +1668,8 @@ if __name__ == "__main__":
     print(f'          -H "Content-Type: application/json" \\')
     print(f'          -d \'{{"systole": 120, "diastole": 80, "heart_rate": 72, "temperature": 36.5, "age": 45, "diabetes": false}}\'')
     
-    print(f"\n Starting server on http://localhost:5000")
+    print(f"\n🚀 Starting LOCAL development server on http://localhost:8080")
     print("=" * 80)
     
-
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=8080, threads=4)
